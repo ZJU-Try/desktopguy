@@ -1,0 +1,25 @@
+# 虚拟环境
+.venv/
+
+# rembg/AI 抠图模型
+.rembg/
+
+# IDE 配置
+.trae/
+
+# 打包产物
+dist/
+build/
+
+# 运行时日志
+pet_debug.log
+
+# 原始素材（图片/视频，不需纳入版本库）
+source_media/
+
+# 运行时资源（透明静态图、动画帧、图标，由脚本生成或本地持有）
+assets/
+
+# Python 缓存
+__pycache__/
+*.pyc
