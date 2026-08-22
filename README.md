@@ -20,11 +20,12 @@ desktopguy/
 ├── src/
 │   ├── pet.py               # 桌面宠物主程序
 │   ├── make_assets.py       # 抠图脚本（生成 cat.png）
-│   └── make_animation.py    # 动画预处理（舔毛.mp4 -> _anim_frames）
+│   ├── make_animation.py    # 动画预处理（舔毛.mp4 -> _tianmao_frames）
+│   └── make_icon.py         # 从 cat.png 生成高清多尺寸 icon.ico
 ├── assets/
 │   ├── cat.png              # 抠图后的透明背景小猫（静止显示）
 │   ├── icon.ico             # 程序图标
-│   └── _anim_frames/        # 舔毛动画的透明帧序列（f000.png ~ f096.png，pet.py 播放）
+│   └── _tianmao_frames/     # 舔毛动画的透明帧序列（f000.png ~ f096.png，pet.py 播放）
 ├── source_media/
 │   ├── 蛋挞.jpg             # 小猫形象原图
 │   └── 舔毛.mp4             # 点击后播放的动画视频源
@@ -59,8 +60,11 @@ cd d:\Code\desktopguy
 # 1) 抠静止小猫图（跳过已下载模型，裁剪+缩放到 220px 高）
 .\.venv\Scripts\python.exe src\make_assets.py
 
-# 2) 从视频生成透明动画帧（存 assets\_anim_frames）
+# 2) 从视频生成透明动画帧（存 assets\_tianmao_frames 和 assets\_walkleft_frames）
 .\.venv\Scripts\python.exe src\make_animation.py
+
+# 3) 生成高清程序图标（包含 16/24/32/48/64/128/256 多尺寸）
+.\.venv\Scripts\python.exe src\make_icon.py
 ```
 
 `make_animation.py` 保证动画与静止图无缝衔接：
@@ -71,7 +75,7 @@ cd d:\Code\desktopguy
 
 ```powershell
 cd d:\Code\desktopguy
-.\.venv\Scripts\pyinstaller.exe --noconfirm --onefile --noconsole --name DesktopPet --icon=assets\icon.ico --add-data "assets\cat.png;assets" --add-data "assets\_anim_frames;assets\_anim_frames" src\pet.py
+.\.venv\Scripts\pyinstaller.exe --noconfirm --onefile --noconsole --name DesktopPet --icon=assets\icon.ico --add-data "assets\cat.png;assets" --add-data "assets\_tianmao_frames;assets\_tianmao_frames" --add-data "assets\_walkleft_frames;assets\_walkleft_frames" --add-data "assets\_walk_offsets.json;assets" src\pet.py
 ```
 
 产物：`dist\DesktopPet.exe`（约 42MB 单文件），可直接拷到其他 Windows 电脑双击运行，无需安装 Python。

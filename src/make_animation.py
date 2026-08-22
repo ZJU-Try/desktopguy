@@ -9,8 +9,8 @@
 6. 统一用 PIL 保存 RGBA
 
 输出:
-  assets/_anim_frames/f000.png ...   舔毛动画 (首帧 f000 复用 cat.png)
-  assets/_walk_frames/f000.png ...   walkleft 动画
+  assets/_tianmao_frames/f000.png ...   舔毛动画 (首帧 f000 复用 cat.png)
+  assets/_walkleft_frames/f000.png ...  walkleft 动画（中间帧体型与静止猫同大同底边）
 """
 import os
 import json
@@ -191,12 +191,12 @@ def process_walk_to_frames(video_path, out_dir, ref, offsets_path, margin=14):
     if not metas:
         raise SystemExit(f"无法从视频取到任何有效帧: {video_path}")
 
-    # 统一固定比例：以中位主体高度为基准，使走路帧的平均体型与静止猫一致。
-    # 所有帧用同一比例 -> 体型比例一致，不随动作渐变；中位帧=216 与静止猫对齐。
-    hs = [c.shape[0] for c, _ in metas]
-    median_h = float(np.median(hs))
-    gscale = ref["ref_h"] / median_h
-    print(f"  walk 中位主体高 {median_h:.0f}px -> 统一固定比例 {gscale:.4f}（所有帧同一比例，无渐变）")
+    # 统一固定比例：以第一个迈步帧的主体高度为基准，缩放到与静止猫同高。
+    # 所有帧用同一比例 -> 体型一致无渐变，且走路全程与静止猫等大
+    # （否则中间帧偏小，切换动画时会出现"缩小再放大"的跳变）。
+    h0 = metas[1][0].shape[0] if len(metas) > 1 else metas[0][0].shape[0]
+    gscale = ref["ref_h"] / h0
+    print(f"  walk 首迈步帧主体高 {h0}px -> 统一固定比例 {gscale:.4f}（与静止猫同高）")
 
     # 画布尺寸：容纳所有统一比例后帧 + 静止猫原图（最后一帧）
     scaled_w = [c.shape[1] * gscale for c, _ in metas]
@@ -229,16 +229,19 @@ def process_walk_to_frames(video_path, out_dir, ref, offsets_path, margin=14):
     print(f"  walk 位移表 -> {offsets_path}（{len(cum)} 帧，末尾 {TAIL_STILL} 帧静止收敛）")
 
     # 第二遍：逐帧缩放/色调/放置到独立画布
-    cat_rgba = ref["cat_rgb"]  # 静止 cat 原图（用于最后一帧无缝衔接）
+    cat_rgba = ref["cat_rgb"]  # 静止 cat 原图（用于首/尾帧无缝衔接）
     cat_w, cat_h = cat_rgba.shape[1], cat_rgba.shape[0]
+    # 静止猫放到画布后的"可见底边"行：首/尾帧与中间帧都对齐到这里，
+    # 而不是画布底边（cat.png 底部有几像素透明边距，对齐画布底边会下沉）
+    cat_oy = can_h - cat_h
+    bottom_y = cat_oy + ref["ref_y1"]
     for i, (crop, _) in enumerate(metas):
         canvas = np.zeros((can_h, can_w, 4), dtype=np.uint8)
         if i == 0 or i == len(metas) - 1:
             # 首/尾帧：直接用静止猫原图（水平居中 + 垂直底对齐放到 walk 画布），
             # 使动画开始/结束瞬间与静止画面位置、大小完全重合（无缝衔接）
             ox = (can_w - cat_w) // 2
-            oy = can_h - cat_h
-            canvas[oy:oy + cat_h, ox:ox + cat_w] = cat_rgba
+            canvas[cat_oy:cat_oy + cat_h, ox:ox + cat_w] = cat_rgba
             Image.fromarray(canvas, "RGBA").save(os.path.join(out_dir, f"f{i:03d}.png"))
             print(f"  walk 首/尾帧 f{i:03d} = 静止猫原图（无缝衔接）")
             continue
@@ -249,7 +252,7 @@ def process_walk_to_frames(video_path, out_dir, ref, offsets_path, margin=14):
         resized = _match_tone(resized, ref["cat_mean"], ref["cat_std"])
 
         x = (can_w - nw) // 2
-        y = can_h - nh  # 底边对齐画布底部
+        y = bottom_y - nh + 1  # 底边对齐静止猫可见底边
         x0c, x1c = max(0, x), min(can_w, x + nw)
         y0c, y1c = max(0, y), min(can_h, y + nh)
         rx0, ry0 = x0c - x, y0c - y
@@ -265,15 +268,15 @@ if __name__ == "__main__":
     # 舔毛动画
     process_video_to_frames(
         video_path=os.path.join(ROOT_DIR, "source_media", "舔毛.mp4"),
-        out_dir=os.path.join(ROOT_DIR, "assets", "_anim_frames"),
+        out_dir=os.path.join(ROOT_DIR, "assets", "_tianmao_frames"),
         ref=ref,
         include_cat_first=True,
     )
 
-    # walkleft 动画（独立大画布 + 迈步位移表）
+    # walkleft 动画（独立大画布 + 迈步位移表 + 与静止猫同大）
     process_walk_to_frames(
         video_path=os.path.join(ROOT_DIR, "source_media", "walkleft.mp4"),
-        out_dir=os.path.join(ROOT_DIR, "assets", "_walk_frames"),
+        out_dir=os.path.join(ROOT_DIR, "assets", "_walkleft_frames"),
         ref=ref,
         offsets_path=os.path.join(ROOT_DIR, "assets", "_walk_offsets.json"),
     )

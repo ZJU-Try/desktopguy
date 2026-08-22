@@ -5,7 +5,12 @@ a = Analysis(
     ['src/pet.py'],
     pathex=[],
     binaries=[],
-    datas=[('assets/cat.png', 'assets'), ('assets/_anim_frames', 'assets/_anim_frames')],
+    datas=[
+        ('assets/cat.png', 'assets'),
+        ('assets/_tianmao_frames', 'assets/_tianmao_frames'),
+        ('assets/_walkleft_frames', 'assets/_walkleft_frames'),
+        ('assets/_walk_offsets.json', 'assets'),
+    ],
     hiddenimports=[],
     hookspath=[],
     hooksconfig={},

@@ -32,8 +32,8 @@ else:
     BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 CAT_IMG = os.path.join(BASE_DIR, "assets", "cat.png")
-LICK_DIR = os.path.join(BASE_DIR, "assets", "_anim_frames")
-WALK_DIR = os.path.join(BASE_DIR, "assets", "_walk_frames_orig")
+LICK_DIR = os.path.join(BASE_DIR, "assets", "_tianmao_frames")
+WALK_DIR = os.path.join(BASE_DIR, "assets", "_walkleft_frames")
 WALK_OFFSETS = os.path.join(BASE_DIR, "assets", "_walk_offsets.json")
 DEBUG_LOG = os.path.join(BASE_DIR, "pet_debug.log")
 
@@ -254,7 +254,9 @@ class PetWindow(QGraphicsView):
             self._move_window_for_walk()
 
     def _move_window_for_walk(self):
-        """只在视频中猫实际迈步的帧移动窗口（用位移表驱动）。"""
+        """只在视频中猫实际迈步的帧移动窗口（用位移表驱动）；拖拽时暂停自动移动。"""
+        if self._dragging:
+            return
         screen = QApplication.primaryScreen().availableGeometry()
         if self._walk_offsets is not None:
             # 用迈步位移累计比例：迈步帧前移，静止帧不动
@@ -272,10 +274,6 @@ class PetWindow(QGraphicsView):
 
     def mousePressEvent(self, event):
         if event.button() == Qt.LeftButton:
-            # 走步期间窗口自动移动，忽略点击/拖动
-            if self._state == PetState.WALKING:
-                event.accept()
-                return
             hit = self._hit_cat(event.pos())
             _log(f"press 命中猫={hit} 状态={self._state.value}")
             if hit:
@@ -310,6 +308,9 @@ class PetWindow(QGraphicsView):
                     _log(f"release 点击但状态={self._state.value}，忽略")
             else:
                 _log(f"release 拖拽结束 moved={self._moved}")
+                if self._moved and self._state == PetState.WALKING:
+                    _log("walk 拖拽结束 -> 停止并恢复静止")
+                    self._finish_walk()
             self._press_global = None
             self._dragging = False
             self._moved = False
