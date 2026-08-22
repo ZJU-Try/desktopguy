@@ -4,7 +4,9 @@
 - 无边框透明窗口，置顶显示在桌面上
 - 平时静止待在桌面右下角
 - 点击小猫后播放"舔毛"动画（逐帧透明序列，来源 舔毛.mp4）
-- 每 8-10 秒自动触发"走步"动画（窗口向左移动 + 播放走姿帧，来源 walkleft.mp4）
+- 每 8-10 秒随机触发三种自动动作之一：
+  "走步"（窗口向左移动 + 播放走姿帧，来源 walkleft.mp4）、
+  "原地动作1"（来源 原地动作1.mp4）、"原地动作2"（来源 原地动作2.mp4）
 - 动画结束后回到静止状态
 - 拖动改变位置，右键菜单可退出
 
@@ -34,6 +36,8 @@ else:
 CAT_IMG = os.path.join(BASE_DIR, "assets", "cat.png")
 LICK_DIR = os.path.join(BASE_DIR, "assets", "_tianmao_frames")
 WALK_DIR = os.path.join(BASE_DIR, "assets", "_walkleft_frames")
+ACTION1_DIR = os.path.join(BASE_DIR, "assets", "_action1_frames")
+ACTION2_DIR = os.path.join(BASE_DIR, "assets", "_action2_frames")
 WALK_OFFSETS = os.path.join(BASE_DIR, "assets", "_walk_offsets.json")
 DEBUG_LOG = os.path.join(BASE_DIR, "pet_debug.log")
 
@@ -51,6 +55,8 @@ class PetState(enum.Enum):
     IDLE = "idle"
     LICKING = "licking"
     WALKING = "walking"
+    ACTION1 = "action1"
+    ACTION2 = "action2"
 
 
 class PetWindow(QGraphicsView):
@@ -67,10 +73,16 @@ class PetWindow(QGraphicsView):
 
         self._lick_frames = self._load_frames(LICK_DIR)
         self._walk_frames = self._load_frames(WALK_DIR)
+        self._action1_frames = self._load_frames(ACTION1_DIR)
+        self._action2_frames = self._load_frames(ACTION2_DIR)
         if not self._lick_frames:
             raise FileNotFoundError(f"找不到舔毛动画帧目录: {LICK_DIR}")
         if not self._walk_frames:
             raise FileNotFoundError(f"找不到走步动画帧目录: {WALK_DIR}")
+        if not self._action1_frames:
+            raise FileNotFoundError(f"找不到原地动作1动画帧目录: {ACTION1_DIR}")
+        if not self._action2_frames:
+            raise FileNotFoundError(f"找不到原地动作2动画帧目录: {ACTION2_DIR}")
 
         # walk 迈步位移表（0~1 累计比例），与实际迈步帧一一对应
         self._walk_offsets = []
@@ -171,16 +183,17 @@ class PetWindow(QGraphicsView):
         return frames
 
     def _schedule_idle_timer(self):
-        """安排下一次自动走步的时间（8-10秒随机）。"""
+        """安排下一次自动动作的时间（8-10秒随机，从走步/动作1/动作2中随机选一个）。"""
         ms = random.randint(self.IDLE_MIN_MS, self.IDLE_MAX_MS)
         self._idle_timer.start(ms)
-        _log(f"空闲计时器: {ms}ms 后自动走步")
+        _log(f"空闲计时器: {ms}ms 后自动动作")
 
     def _on_idle_timeout(self):
-        """空闲超时 -> 触发走步动画。"""
+        """空闲超时 -> 随机触发 走步 / 原地动作1 / 原地动作2 之一。"""
         if self._state == PetState.IDLE:
-            _log("空闲超时 -> 开始走步")
-            self._play_walk()
+            choice = random.choice([PetState.WALKING, PetState.ACTION1, PetState.ACTION2])
+            _log(f"空闲超时 -> 随机触发 {choice.value}")
+            self._play_anim(choice)
 
     # ---- 状态控制 ----
     def _set_state(self, new_state):
@@ -192,11 +205,16 @@ class PetWindow(QGraphicsView):
             return self._lick_frames
         elif self._state == PetState.WALKING:
             return self._walk_frames
+        elif self._state == PetState.ACTION1:
+            return self._action1_frames
+        elif self._state == PetState.ACTION2:
+            return self._action2_frames
         return []
 
     # ---- 播放控制 ----
-    def _play_lick(self):
-        if self._state != PetState.IDLE:
+    def _play_lick(self, force=False):
+        """播放舔毛动画。force=True 时允许在任意状态下触发（右键菜单用）。"""
+        if not force and self._state != PetState.IDLE:
             return
         self._idle_timer.stop()
         self._set_state(PetState.LICKING)
@@ -207,22 +225,47 @@ class PetWindow(QGraphicsView):
         self.frame_item.setVisible(True)
         self._anim_timer.start()
 
-    def _play_walk(self):
-        """开始走步：窗口尺寸已与静止统一（228x252），仅切换画面并记录起点。"""
+    def _menu_play(self, state):
+        """右键菜单触发：在任意状态下直接切换播放对应动画。"""
+        if state == PetState.LICKING:
+            self._play_lick(force=True)
+        else:
+            self._play_anim(state)
+
+    def _play_anim(self, state):
+        """播放走步 / 原地动作1 / 原地动作2 动画（统一画布，窗口无需 resize）。"""
+        frames = {
+            PetState.WALKING: self._walk_frames,
+            PetState.ACTION1: self._action1_frames,
+            PetState.ACTION2: self._action2_frames,
+        }[state]
         self._idle_timer.stop()
-        self._set_state(PetState.WALKING)
+        self._set_state(state)
         self._frame_idx = 0
 
-        # 窗口尺寸统一，无需 resize；底边始终对齐
-        self._walk_base_x = self.x()
-        self._walk_bottom = self.y() + self.height()
+        if state == PetState.WALKING:
+            # 走步：记录窗口起点（底边始终对齐，仅水平位移）
+            self._walk_base_x = self.x()
+            self._walk_bottom = self.y() + self.height()
+            _log(f"walk 开始: 起点 x={self._walk_base_x}")
+        else:
+            _log(f"{state.value} 开始（原地，窗口不动）")
 
         self.cat_item.setVisible(False)
-        self.frame_item.setPixmap(self._walk_frames[0])
+        self.frame_item.setPixmap(frames[0])
         self.frame_item.setPos(0, 0)
         self.frame_item.setVisible(True)
         self._anim_timer.start()
-        _log(f"walk 开始: 起点 x={self._walk_base_x}")
+
+    def _finish_anim(self):
+        """结束原地动作：切回静止猫（与最后一帧同一画布，无闪烁）。"""
+        name = self._state.value
+        self._anim_timer.stop()
+        self.frame_item.setVisible(False)
+        self.cat_item.setVisible(True)
+        self._set_state(PetState.IDLE)
+        self._schedule_idle_timer()
+        _log(f"{name} 结束，恢复静止")
 
     def _finish_walk(self):
         """结束走步：窗口尺寸不变，直接切回静止猫（与最后一帧同一画布，无闪烁）。"""
@@ -241,6 +284,8 @@ class PetWindow(QGraphicsView):
             self._anim_timer.stop()
             if self._state == PetState.WALKING:
                 self._finish_walk()
+            elif self._state in (PetState.ACTION1, PetState.ACTION2):
+                self._finish_anim()
             else:
                 self.frame_item.setVisible(False)
                 self.cat_item.setVisible(True)
@@ -308,9 +353,12 @@ class PetWindow(QGraphicsView):
                     _log(f"release 点击但状态={self._state.value}，忽略")
             else:
                 _log(f"release 拖拽结束 moved={self._moved}")
-                if self._moved and self._state == PetState.WALKING:
-                    _log("walk 拖拽结束 -> 停止并恢复静止")
-                    self._finish_walk()
+                if self._moved and self._state in (PetState.WALKING, PetState.ACTION1, PetState.ACTION2):
+                    _log(f"{self._state.value} 拖拽结束 -> 停止并恢复静止")
+                    if self._state == PetState.WALKING:
+                        self._finish_walk()
+                    else:
+                        self._finish_anim()
             self._press_global = None
             self._dragging = False
             self._moved = False
@@ -332,10 +380,50 @@ class PetWindow(QGraphicsView):
                 return alpha > 10
         return False
 
-    # ---- 右键菜单 ----
+    # ---- 右键菜单（简洁可爱风：圆角奶油色 + emoji 图标）----
+    MENU_QSS = """
+    QMenu {
+        background-color: #fff6ee;
+        border: 2px solid #ffd9c2;
+        border-radius: 14px;
+        padding: 6px;
+        font-size: 13px;
+        font-family: "Microsoft YaHei", "Segoe UI";
+        color: #6b4f3a;
+    }
+    QMenu::item {
+        padding: 7px 24px 7px 12px;
+        border-radius: 8px;
+        margin: 2px 4px;
+        background: transparent;
+    }
+    QMenu::item:selected {
+        background-color: #ffe3cf;
+        color: #5a3a26;
+    }
+    QMenu::separator {
+        height: 1px;
+        background: #f2ded0;
+        margin: 5px 10px;
+    }
+    """
+
     def contextMenuEvent(self, event):
         menu = QMenu(self)
-        act_quit = QAction("退出", menu)
+        menu.setStyleSheet(self.MENU_QSS)
+        menu.setWindowFlags(menu.windowFlags() | Qt.FramelessWindowHint | Qt.NoDropShadowWindowHint)
+
+        def _add_item(text, state):
+            act = QAction(text, menu)
+            act.triggered.connect(lambda: self._menu_play(state))
+            menu.addAction(act)
+
+        _add_item("🐾  舔毛", PetState.LICKING)
+        _add_item("🚶  走动", PetState.WALKING)
+        _add_item("💃  动作 1", PetState.ACTION1)
+        _add_item("🙌  动作 2", PetState.ACTION2)
+        menu.addSeparator()
+        act_quit = QAction("🚪  退出", menu)
         act_quit.triggered.connect(QApplication.quit)
         menu.addAction(act_quit)
         menu.exec_(event.globalPos())
@@ -354,8 +442,8 @@ def main():
 
     pet = PetWindow()
     pet.show()
-    _log("宠物启动（增强版：状态机 + 自动走步）")
-    print("桌面宠物已启动：点击播放舔毛动画，每 8-10 秒自动走步，拖动改变位置，右键退出", flush=True)
+    _log("宠物启动（增强版：状态机 + 三种自动动作）")
+    print("桌面宠物已启动：点击播放舔毛动画，每 8-10 秒随机走步/原地动作，拖动改变位置，右键退出", flush=True)
     try:
         sys.exit(app.exec_())
     except KeyboardInterrupt:

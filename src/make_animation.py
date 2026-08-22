@@ -11,6 +11,8 @@
 输出:
   assets/_tianmao_frames/f000.png ...   舔毛动画 (首帧 f000 复用 cat.png)
   assets/_walkleft_frames/f000.png ...  walkleft 动画（中间帧体型与静止猫同大同底边）
+  assets/_action1_frames/f000.png ...   原地动作1（质心对齐，画布统一 320x280）
+  assets/_action2_frames/f000.png ...   原地动作2（质心对齐，画布统一 320x280）
 """
 import os
 import json
@@ -62,6 +64,37 @@ def _crop_alpha(out):
     x0, x1 = xs.min(), xs.max()
     y0, y1 = ys.min(), ys.max()
     return out[y0:y1 + 1, x0:x1 + 1], x0, y0
+
+
+def _estimate_bg(rgb):
+    """从画面四角 + 上下边中点采样背景色（视频背景近似均匀浅色）。"""
+    h, w = rgb.shape[:2]
+    pts = np.array([rgb[3, 3], rgb[3, w - 4], rgb[h - 4, 3], rgb[h - 4, w - 4],
+                    rgb[3, w // 2], rgb[h - 4, w // 2]])
+    return pts.mean(axis=0).astype(np.float32)
+
+
+def _recover_tail(rgb, out, fg_thr=55, max_iter=200):
+    """补齐 u2net 漏抠的尾巴（半透明 或 整段被切 alpha=0 均可恢复）。
+
+    背景近似均匀，尾巴像素颜色明显异于背景；以 rembg 现有前景（alpha>10）为
+    种子做"色距区域生长"，只向"颜色距背景>fg_thr 且连通"的像素扩展，即可补齐
+    尾巴且不会混入背景/阴影（阴影距背景仅 ~27，低于阈值）。若该帧尾巴完整则几乎无改动。
+    """
+    a = out[:, :, 3]
+    bg = _estimate_bg(rgb)
+    dist = np.abs(rgb.astype(np.float32) - bg).mean(axis=2)
+    fg_cand = dist > fg_thr
+    grow = (a > 10).astype(np.uint8)
+    k = np.ones((3, 3), np.uint8)
+    for _ in range(max_iter):
+        g = ((cv2.dilate(grow, k) > 0) & fg_cand).astype(np.uint8)
+        if (g == grow).all():
+            grow = g
+            break
+        grow = g
+    out[:, :, 3] = np.maximum(a, grow * 255).astype(np.uint8)
+    return out
 
 
 def _match_tone(rgba, cat_mean, cat_std):
@@ -156,7 +189,7 @@ def process_video_to_frames(video_path, out_dir, ref, include_cat_first=False):
     print(f"  完成，共 {idx} 帧 -> {out_dir}")
 
 
-def process_walk_to_frames(video_path, out_dir, ref, offsets_path, margin=14):
+def process_walk_to_frames(video_path, out_dir, ref, offsets_path, margin=14, canvas_size=(320, 280)):
     """walkleft 专用：用更大画布保证完整显示，所有帧缩放到与静止猫同一高度。
 
     关键：
@@ -198,13 +231,20 @@ def process_walk_to_frames(video_path, out_dir, ref, offsets_path, margin=14):
     gscale = ref["ref_h"] / h0
     print(f"  walk 首迈步帧主体高 {h0}px -> 统一固定比例 {gscale:.4f}（与静止猫同高）")
 
-    # 画布尺寸：容纳所有统一比例后帧 + 静止猫原图（最后一帧）
+    # 画布尺寸：默认用统一画布（与动作动画一致），若不传入则自动按最大帧计算
     scaled_w = [c.shape[1] * gscale for c, _ in metas]
     scaled_h = [c.shape[0] * gscale for c, _ in metas]
     cat_rgba = ref["cat_rgb"]  # 静止 cat 原图（用于首/尾帧无缝衔接）
     cat_w, cat_h = cat_rgba.shape[1], cat_rgba.shape[0]
-    can_w = int(np.ceil(max(max(scaled_w), cat_w))) + margin
-    can_h = int(np.ceil(max(max(scaled_h), cat_h))) + margin
+    if canvas_size is not None:
+        can_w, can_h = canvas_size
+        need_w = int(np.ceil(max(max(scaled_w), cat_w))) + margin
+        need_h = int(np.ceil(max(max(scaled_h), cat_h))) + margin
+        if need_w > can_w or need_h > can_h:
+            print(f"  WARN: 统一画布 {can_w}x{can_h} 小于所需 {need_w}x{need_h}，帧可能被裁剪！")
+    else:
+        can_w = int(np.ceil(max(max(scaled_w), cat_w))) + margin
+        can_h = int(np.ceil(max(max(scaled_h), cat_h))) + margin
     print(f"  walk 画布: {can_w}x{can_h}  统一比例后尺寸范围: 宽 {min(scaled_w):.0f}~{max(scaled_w):.0f} 高 {min(scaled_h):.0f}~{max(scaled_h):.0f}")
 
     # 迈步位移表：每帧 x 中心相对上一帧位移，超过阈值才视为实际迈步（消除静止期微动滑动）
@@ -261,6 +301,94 @@ def process_walk_to_frames(video_path, out_dir, ref, offsets_path, margin=14):
     print(f"  walk 完成，共 {len(metas)} 帧 -> {out_dir}")
 
 
+def process_action_to_frames(video_path, out_dir, ref, canvas_size=(320, 280), margin=14):
+    """原地动作专用：统一固定比例 + 色调匹配 + 底边对齐 + 质心对齐（消除猫身漂移/跳变）。
+
+    关键（与 walk 的统一约定）：
+    - 统一固定缩放比例，使第一个姿态帧的主体高度 = 静止猫主体高度（体型一致）
+    - 首/尾帧 = 静止猫原图，放到画布"水平居中 + 垂直底对齐"位置，保证无缝衔接
+    - 中间帧底边对齐到静止猫的可见底边；水平方向用 **alpha 加权质心对齐**到
+      静止猫质心 —— 让猫身视觉主体在动作全程稳定居中，避免视频中猫身整体
+      左右漂移/突变造成的"偏移和跳变"
+    - 画布使用与 walk 相同的统一尺寸 canvas_size（默认 320x280），
+      保证任一动作的帧（含伸出的半透明毛边）完整显示且不超出画布
+    """
+    os.makedirs(out_dir, exist_ok=True)
+
+    cap = cv2.VideoCapture(video_path)
+    if not cap.isOpened():
+        raise SystemExit(f"无法打开视频: {video_path}")
+
+    # 第一遍：rembg 抠图（每帧做尾巴恢复）-> 收集 crop 与 alpha 加权质心
+    crops, cxs, n_recovered = [], [], 0
+    while True:
+        ok, frame = cap.read()
+        if not ok:
+            break
+        rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        out = np.array(remove(Image.fromarray(rgb), session=session))
+        # u2net 常把细长尾巴抠成半透明甚至整段切掉（此时质心偏移引发跳变/鬼影）。
+        # 对每帧都做色距区域生长恢复：只把"异于背景色且连通"的像素补为实心，
+        # 不会混入背景/阴影；若该帧尾巴本来就完整，则几乎无改动。
+        out = _recover_tail(rgb, out)
+        n_recovered += 1
+        res = _crop_alpha(out)
+        if res is not None:
+            crop, _, _ = res
+            crops.append(crop)
+            a = crop[:, :, 3]
+            m = a > 40
+            w = a[m].astype(np.float64)
+            xs = np.arange(crop.shape[1])
+            cxs.append(float((xs[None, :] * a)[m].sum() / w.sum()))
+    cap.release()
+    print(f"  action 尾巴恢复：全部 {n_recovered} 帧均经过区域生长补齐")
+    if not crops:
+        raise SystemExit(f"无法从视频取到任何有效帧: {video_path}")
+
+    # 统一固定比例：第一个姿态帧的主体高度 -> 静止猫主体高度
+    h0 = crops[1].shape[0] if len(crops) > 1 else crops[0].shape[0]
+    gscale = ref["ref_h"] / h0
+    print(f"  action 首姿态帧主体高 {h0}px -> 统一固定比例 {gscale:.4f}（与静止猫同高）")
+
+    can_w, can_h = canvas_size
+    cat_rgba = ref["cat_rgb"]
+    cat_w, cat_h = cat_rgba.shape[1], cat_rgba.shape[0]
+    cat_oy = can_h - cat_h
+    cat_ox = (can_w - cat_w) // 2
+    bottom_y = cat_oy + ref["ref_y1"]  # 静止猫可见底边行
+    # 静止猫 alpha 加权质心 -> 动画帧的质心对齐基准
+    cat_a = cat_rgba[:, :, 3]
+    cat_m = cat_a > 40
+    cat_cx = float((np.arange(cat_w)[None, :] * cat_a)[cat_m].sum() / cat_a[cat_m].sum())
+    ref_cx = cat_ox + cat_cx
+    print(f"  action 画布: {can_w}x{can_h}  质心对齐基准 {ref_cx:.1f}（静止猫质心）  底边行 {bottom_y}")
+
+    for i, crop in enumerate(crops):
+        canvas = np.zeros((can_h, can_w, 4), dtype=np.uint8)
+        if i == 0 or i == len(crops) - 1:
+            # 首/尾帧：静止猫原图（水平居中 + 垂直底对齐）-> 无缝衔接
+            canvas[cat_oy:cat_oy + cat_h, cat_ox:cat_ox + cat_w] = cat_rgba
+            Image.fromarray(canvas, "RGBA").save(os.path.join(out_dir, f"f{i:03d}.png"))
+            print(f"  action 首/尾帧 f{i:03d} = 静止猫原图（无缝衔接）")
+            continue
+        nw = max(1, int(round(crop.shape[1] * gscale)))
+        nh = max(1, int(round(crop.shape[0] * gscale)))
+        resized = cv2.resize(crop, (nw, nh), interpolation=cv2.INTER_AREA)
+        resized = _match_tone(resized, ref["cat_mean"], ref["cat_std"])
+
+        # 质心对齐：缩放后质心 = crop质心 * gscale，放置使其对齐静止猫质心
+        cx_scaled = cxs[i] * gscale
+        x = int(round(ref_cx - cx_scaled))
+        y = bottom_y - nh + 1
+        x0c, x1c = max(0, x), min(can_w, x + nw)
+        y0c, y1c = max(0, y), min(can_h, y + nh)
+        rx0, ry0 = x0c - x, y0c - y
+        canvas[y0c:y1c, x0c:x1c] = resized[ry0:ry0 + (y1c - y0c), rx0:rx0 + (x1c - x0c)]
+        Image.fromarray(canvas, "RGBA").save(os.path.join(out_dir, f"f{i:03d}.png"))
+    print(f"  action 完成，共 {len(crops)} 帧 -> {out_dir}")
+
+
 if __name__ == "__main__":
     ref = _load_cat_ref()
     print(f"画布: ({ref['can_w']}, {ref['can_h']})  主体 x[{ref['ref_x0']},{ref['ref_x1']}] y[{ref['ref_y0']},{ref['ref_y1']}]  色调均值 {[f'{v:.1f}' for v in ref['cat_mean'].values()]}")
@@ -280,3 +408,12 @@ if __name__ == "__main__":
         ref=ref,
         offsets_path=os.path.join(ROOT_DIR, "assets", "_walk_offsets.json"),
     )
+
+    # 原地动作1 / 原地动作2（质心对齐，统一画布 320x280，无位移表）
+    for vname, outname in [("原地动作1.mp4", "_action1_frames"), ("原地动作2.mp4", "_action2_frames")]:
+        process_action_to_frames(
+            video_path=os.path.join(ROOT_DIR, "source_media", vname),
+            out_dir=os.path.join(ROOT_DIR, "assets", outname),
+            ref=ref,
+            canvas_size=(320, 280),
+        )

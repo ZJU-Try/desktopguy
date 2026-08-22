@@ -9,6 +9,8 @@ a = Analysis(
         ('assets/cat.png', 'assets'),
         ('assets/_tianmao_frames', 'assets/_tianmao_frames'),
         ('assets/_walkleft_frames', 'assets/_walkleft_frames'),
+        ('assets/_action1_frames', 'assets/_action1_frames'),
+        ('assets/_action2_frames', 'assets/_action2_frames'),
         ('assets/_walk_offsets.json', 'assets'),
     ],
     hiddenimports=[],
