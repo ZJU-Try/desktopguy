@@ -1,4 +1,4 @@
-"""从 cat.png 生成高清多尺寸 icon.ico（用于 exe/窗口图标）。
+"""从 icon.png 生成高清多尺寸 icon.ico（用于 exe/窗口图标）。
 
 Windows 会根据显示场景自动选择合适尺寸，因此需要包含 16/24/32/48/64/128/256
 多个分辨率，避免资源管理器/任务栏拉伸模糊。
@@ -8,7 +8,7 @@ import struct
 import numpy as np
 from PIL import Image
 
-CAT_IMG = "assets/cat.png"
+CAT_IMG = "assets/icon.png"
 ICON_OUT = "assets/icon.ico"
 
 
